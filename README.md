@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>线索量自助查询</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -12,7 +13,7 @@
       min-height: 100vh;
       display: flex;
       justify-content: center;
-      align-items: center;
+      align-items: flex-start;
       padding: 20px;
     }
     .container {
@@ -132,6 +133,30 @@
     .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
     .empty-state p { font-size: 14px; }
 
+    /* 管理员页面 */
+    .admin-page { padding: 20px; }
+    .admin-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 20px;
+    }
+    .admin-header h2 { font-size: 18px; color: #333; }
+    .admin-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 13px;
+    }
+    .admin-table th, .admin-table td {
+      padding: 10px 8px; text-align: left;
+      border-bottom: 1px solid #eee;
+    }
+    .admin-table th {
+      background: #f8f9fa; color: #666; font-weight: 600;
+      font-size: 12px;
+    }
+    .admin-table td { color: #333; }
+    .admin-table tr:hover { background: #f8f9fa; }
+    .log-time { color: #999; font-size: 12px; }
+    .log-user { color: #667eea; font-weight: 500; }
+    .log-city { font-weight: 500; }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -172,6 +197,17 @@
         <button class="btn btn-primary" id="searchBtn">🔍 查询</button>
         <button class="btn btn-secondary" id="logoutBtn">退出登录</button>
         <div id="resultArea"></div>
+      </div>
+
+      <!-- 管理员页面 -->
+      <div id="adminPage" class="hidden admin-page">
+        <div class="admin-header">
+          <h2>📊 查询记录（管理员）</h2>
+          <button class="btn btn-secondary" id="backBtn" style="width:auto;padding:8px 16px;font-size:13px;">返回查询</button>
+        </div>
+        <div id="adminContent">
+          <p style="color:#999;text-align:center;padding:20px;">加载中...</p>
+        </div>
       </div>
     </div>
   </div>
@@ -2884,14 +2920,22 @@
     "暂停中线索包量": 0
   }
 ];
-
       const USER_PASSWORDS = {
-        "123456": "张三",
-        "234567": "李四",
-        "345678": "王五",
-        "38000": "刘威龙",
-        "admin01": "管理员"
-      };
+  "123456": "张三",
+  "234567": "李四",
+  "345678": "王五",
+  "38000": "刘威龙",
+  "admin01": "管理员"
+};
+      const SUPABASE_URL = 'https://pcnctxyfsvitbynbfdhe.supabase.co';
+      const SUPABASE_KEY = 'sb_publishable_QRcncGA7xJC1G7isVbzfXA_u7to0IS0';
+
+      let supabase = null;
+      if (typeof supabase !== 'undefined' && SUPABASE_URL && SUPABASE_KEY) {
+        try {
+          supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        } catch(e) { console.error('Supabase init failed', e); }
+      }
 
       let currentPassword = '';
       let currentUser = '';
@@ -2919,6 +2963,7 @@
         getEl('passwordInput').value = '';
         getEl('loginPage').classList.remove('hidden');
         getEl('queryPage').classList.add('hidden');
+        getEl('adminPage').classList.add('hidden');
         getEl('resultArea').innerHTML = '';
         getEl('cityInput').value = '';
         getEl('loginError').textContent = '';
@@ -2933,9 +2978,29 @@
         return String(val);
       }
 
+      // 保存查询记录到Supabase
+      async function saveLog(cityName) {
+        if (!supabase || !currentUser) return;
+        try {
+          await supabase.from('query_logs').insert({
+            user_name: currentUser,
+            user_id: currentPassword,
+            city: cityName,
+            query_time: new Date().toISOString()
+          });
+        } catch(e) { console.error('Save log failed', e); }
+      }
+
       function doSearch() {
         const input = getEl('cityInput').value.trim();
         if (!input) return;
+
+        // 检查是否是管理员入口
+        if (input === 'adminlogs' && currentPassword === 'admin01') {
+          showAdminPage();
+          return;
+        }
+
         const result = CITY_DATA.find(function(item) {
           return item.city === input || item.city.includes(input) || input.includes(item.city);
         });
@@ -2955,15 +3020,61 @@
               '</div>',
             '</div>'
           ].join('');
+          saveLog(result.city);
         } else {
           resultArea.innerHTML = '<div class="empty-state"><div class="icon">😕</div><p>未找到城市 "' + input + '"<br>请检查城市名称是否正确</p></div>';
         }
         getEl('suggestions').classList.remove('active');
       }
 
+      // 管理员页面
+      async function showAdminPage() {
+        getEl('queryPage').classList.add('hidden');
+        getEl('adminPage').classList.remove('hidden');
+        const content = getEl('adminContent');
+        
+        if (!supabase) {
+          content.innerHTML = '<p style="color:#e74c3c;text-align:center;padding:20px;">Supabase未连接，无法查看记录</p>';
+          return;
+        }
+
+        content.innerHTML = '<p style="color:#999;text-align:center;padding:20px;">加载中...</p>';
+        
+        try {
+          const { data, error } = await supabase
+            .from('query_logs')
+            .select('*')
+            .order('query_time', { ascending: false })
+            .limit(100);
+          
+          if (error) throw error;
+          
+          if (!data || data.length === 0) {
+            content.innerHTML = '<p style="color:#999;text-align:center;padding:20px;">暂无查询记录</p>';
+            return;
+          }
+
+          let html = '<table class="admin-table"><thead><tr><th>时间</th><th>销售</th><th>城市</th></tr></thead><tbody>';
+          data.forEach(function(row) {
+            const time = new Date(row.query_time).toLocaleString('zh-CN', {
+              month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+            });
+            html += '<tr><td class="log-time">' + time + '</td><td class="log-user">' + (row.user_name || '') + '</td><td class="log-city">' + (row.city || '') + '</td></tr>';
+          });
+          html += '</tbody></table>';
+          content.innerHTML = html;
+        } catch(e) {
+          content.innerHTML = '<p style="color:#e74c3c;text-align:center;padding:20px;">加载失败: ' + e.message + '</p>';
+        }
+      }
+
       getEl('loginBtn').addEventListener('click', doLogin);
       getEl('logoutBtn').addEventListener('click', doLogout);
       getEl('searchBtn').addEventListener('click', doSearch);
+      getEl('backBtn').addEventListener('click', function() {
+        getEl('adminPage').classList.add('hidden');
+        getEl('queryPage').classList.remove('hidden');
+      });
       getEl('passwordInput').addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });
       getEl('cityInput').addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
       const cityInput = getEl('cityInput');
